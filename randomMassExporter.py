@@ -2,6 +2,7 @@ from krita import Krita, InfoObject
 import json
 import os
 import random
+import subprocess
 import time
 import glob
 
@@ -19,14 +20,15 @@ rarity_names = [
 ]
 
 rarity_counts = {
-    'Legendary': 20,
-    'Epic': 96,
-    'Rare': 192,
-    'Uncommon': 480,
-    'Common': 1132,  # Adjusted to total 1920 images
+    'Legendary': 2,
+    'Epic': 3,
+    'Rare': 5,
+    'Uncommon': 10,
+    'Common': 20,  # Adjusted to total 40 images
 }
 
 # Total number of images to generate
+# The example traits below only have 90 unique combinations (42 for Common, since it never gets rare values), so keep the counts well under that
 num_images = sum(rarity_counts.values())
 
 # Define attributes with possible values and their weights (rarity)
@@ -53,21 +55,32 @@ def choose_weighted(values, weights):
     """Randomly choose an item from values list based on weights."""
     return random.choices(values, weights=weights, k=1)[0]
 
+def set_tree_visible(nodes, state):
+    """Set the visibility of layers and everything inside them."""
+    for node in nodes:
+        node.setVisible(state)
+        set_tree_visible(node.childNodes(), state)
+
 def set_layer_active(name, state):
     """Set the visibility of a layer by its name."""
     layer = doc.nodeByName(name)
-    if layer:
-        layer.setVisible(state)
+    if not layer:
+        raise ValueError(f"Missing layer: {name}")
+    set_tree_visible([layer], state)
+
+    # Groups the layer is in need to be visible too or it won't show up
+    if state:
+        parent = layer.parentNode()
+        while parent:
+            parent.setVisible(True)
+            parent = parent.parentNode()
 
 def set_all_layers_inactive():
-    """Set all layers in the document to invisible."""
-    for node in doc.topLevelNodes():
-        node.setVisible(False)
-        for child in node.childNodes():
-            child.setVisible(False)
+    """Set all layers in the document to invisible, including layers inside groups."""
+    set_tree_visible(doc.topLevelNodes(), False)
 
-# List to keep track of unique images
-unique_images = []
+# Set to keep track of unique images
+unique_images = set()
 
 # Directory placeholders (replace with your desired directories)
 output_image_dir = "/path/to/output/images"      # Replace with your output images directory
@@ -82,6 +95,7 @@ os.makedirs(gif_dir, exist_ok=True)
 
 # Flag to control animation generation
 generate_animation = True  # Set to False if you do not want to generate animations
+ffmpeg_path = "ffmpeg"  # Full path to ffmpeg if it's not on your PATH
 
 # Data dictionary to store metadata
 data = {}
@@ -94,31 +108,33 @@ random.shuffle(rarity_list)
 
 def generate_random_image(index, rarity):
     """Generate a random image with unique traits and export it."""
-    traits = {}
-    # Randomly select traits based on weights
-    for attr, attr_info in attributes.items():
-        # Decide if we should include a rare value for this attribute
-        include_rare = False
-        rare_chance = {
-            'Common': 0,
-            'Uncommon': 0.1,
-            'Rare': 0.2,
-            'Epic': 0.3,
-            'Legendary': 0.5,
-        }
-        if attr_info.get('rare_values') and random.random() < rare_chance[rarity]:
-            # Choose a rare value
-            value = random.choice(attr_info['rare_values'])
-        else:
-            # Choose a common value
-            value = choose_weighted(attr_info['values'], attr_info['weights'])
-        traits[attr] = value
+    rare_chance = {
+        'Common': 0,
+        'Uncommon': 0.1,
+        'Rare': 0.2,
+        'Epic': 0.3,
+        'Legendary': 0.5,
+    }
 
-    # Ensure uniqueness
-    if traits in unique_images:
-        # Duplicate found, regenerate
-        return generate_random_image(index, rarity)
-    unique_images.append(traits.copy())
+    # Keep rolling until the combination is unique
+    for attempt in range(1000):
+        traits = {}
+        # Randomly select traits based on weights
+        for attr, attr_info in attributes.items():
+            # Decide if we should include a rare value for this attribute
+            if attr_info.get('rare_values') and random.random() < rare_chance[rarity]:
+                # Choose a rare value
+                value = random.choice(attr_info['rare_values'])
+            else:
+                # Choose a common value
+                value = choose_weighted(attr_info['values'], attr_info['weights'])
+            traits[attr] = value
+
+        if tuple(traits.values()) not in unique_images:
+            break
+    else:
+        raise RuntimeError(f"Ran out of unique combinations at image {index}, add more trait variations or lower rarity_counts")
+    unique_images.add(tuple(traits.values()))
 
     # Set layers based on traits
     set_all_layers_inactive()
@@ -165,8 +181,8 @@ def render_frames(traits, index):
 
     # Create animated GIF using ffmpeg
     output_gif = os.path.join(gif_dir, f"animation_{index}.gif")
-    ffmpeg_command = f"ffmpeg -y -f image2 -framerate 24 -i {frames_dir}/frame_%d.png {output_gif}"
-    os.system(ffmpeg_command)
+    frame_pattern = os.path.join(frames_dir, "frame_%d.png")
+    subprocess.run([ffmpeg_path, "-y", "-f", "image2", "-framerate", "24", "-i", frame_pattern, output_gif], check=True)
 
     # Clean up frames
     files = glob.glob(f'{frames_dir}/*')
