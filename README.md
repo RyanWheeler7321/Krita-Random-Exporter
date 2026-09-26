@@ -1,3 +1,5 @@
+<img src="icon.svg" alt="Krita Random Exporter icon" width="96">
+
 # Krita Random Exporter
 
 A python script for exporting large amounts of varying images from Krita. Includes functionality for rarity and as many random traits as desired.
